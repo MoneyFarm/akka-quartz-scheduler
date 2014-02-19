@@ -30,7 +30,7 @@ class QuartzSchedulerExtension(system: ExtendedActorSystem) extends Extension {
   // todo - use of the circuit breaker to encapsulate quartz failures?
   def schedulerName = "QuartzScheduler~%s".format(system.name)
 
-  protected val config = system.settings.config.withFallback(defaultConfig).getConfig("akka.quartz").root.toConfig
+  protected var config = system.settings.config.withFallback(defaultConfig).getConfig("akka.quartz").root.toConfig
 
  // For config values that can be omitted by user, to setup a fallback
   lazy val defaultConfig =  ConfigFactory.parseString("""
@@ -62,7 +62,7 @@ class QuartzSchedulerExtension(system: ExtendedActorSystem) extends Extension {
    *
    * RECAST KEY AS UPPERCASE TO AVOID RUNTIME LOOKUP ISSUES
    */
-  val schedules: immutable.Map[String, QuartzSchedule] = QuartzSchedules(config, defaultTimezone).map { kv =>
+  var schedules: immutable.Map[String, QuartzSchedule] = QuartzSchedules(config, defaultTimezone).map { kv =>
     kv._1.toUpperCase -> kv._2
   }
   val runningJobs: mutable.Map[String, JobKey] = mutable.Map.empty[String, JobKey]
@@ -100,6 +100,50 @@ class QuartzSchedulerExtension(system: ExtendedActorSystem) extends Extension {
   def suspendAll(): Unit = {
     log.info("Suspending all Quartz jobs.")
     scheduler.pauseAll()
+  }
+
+  /**
+   * Shuts down the underlying scheduler, after the call
+   * the scheduler can't be restarted
+   */
+  def shutdown:Unit = scheduler.shutdown
+
+
+  /**
+   * Substitute the current configuration with the given conf performing a hot reload where
+   * the running jobs will use the new configuration or will be deleted if there is no configuration
+   * entry for the job
+   *
+   * @param conf
+   */
+  def reloadConfig(conf:Config):Unit = {
+
+    log.info("Reloading configuration for "+schedulerName)
+
+    config = conf.withFallback(defaultConfig).getConfig("akka.quartz").root.toConfig
+    schedules = QuartzSchedules(config, defaultTimezone) map { kv =>
+      kv._1.toUpperCase -> kv._2
+    }
+
+    runningJobs foreach{ (e:(String,JobKey)) =>                                    //re-schedule the running jobs to use the new configuration
+
+      val quartzSchedule = schedules.get(e._1.toUpperCase)
+
+      quartzSchedule match {
+        case None => {                                                             //the running job was not found in the new configuration, delete the job
+          log.info("Deleting job "+e._1)
+          scheduler.deleteJob(e._2)
+        }
+        case Some(schedule:QuartzSchedule) => {                                    //the running job is being found among the new schedules, then build the Trigger
+          log.info("Respawning job "+e._1)                                         //using the new configuration
+          val newTrigger = schedule.buildTrigger(e._1)
+          val jobDetail = scheduler.getJobDetail(e._2)
+          scheduler.deleteJob(e._2)
+          scheduler.scheduleJob(jobDetail,newTrigger)
+        }
+      }
+    }
+
   }
 
   /**
@@ -196,7 +240,7 @@ class QuartzSchedulerExtension(system: ExtendedActorSystem) extends Extension {
     b += "message" -> msg
 
     val jobData = JobDataMapSupport.newJobDataMap(b.result.asJava)
-    val job = JobBuilder.newJob(classOf[SimpleActorMessageJob])
+    val job:JobDetail = JobBuilder.newJob(classOf[SimpleActorMessageJob])
                         .withIdentity(name + "_Job")
                         .usingJobData(jobData)
                         .withDescription(schedule.description.getOrElse(null))
@@ -234,6 +278,8 @@ class QuartzSchedulerExtension(system: ExtendedActorSystem) extends Extension {
     _tp.setMakeThreadsDaemons(daemonThreads_?)
     _tp
   }
+
+
 
   lazy protected val jobStore = {
     // TODO - Make this potentially configurable,  but for now we don't want persistable jobs.

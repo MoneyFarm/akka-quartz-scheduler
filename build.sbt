@@ -2,12 +2,11 @@ name := "akka-quartz-scheduler"
 
 organization := "com.typesafe.akka"
 
-version := "1.2.0"
+version := "1.2.1"
 
 scalaVersion := "2.10.1"
 
 resolvers += "Typesafe Repository" at "http://repo.typesafe.com/typesafe/releases"
-
 
 libraryDependencies ++= Seq(
     "com.typesafe.akka" %% "akka-actor" % "2.1.4" % "provided",
