@@ -1,6 +1,6 @@
 name := "akka-quartz-scheduler" 
 
-organization := "com.typesafe.akka"
+organization := "com.moneyfarm.akka"
 
 version := "1.2.1"
 

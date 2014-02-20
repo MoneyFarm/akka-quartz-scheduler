@@ -16,25 +16,28 @@ import scala.Some
 import scala.collection.mutable
 
 
-object QuartzSchedulerExtension extends ExtensionKey[QuartzSchedulerExtension]
+object QuartzSchedulerExtension extends ExtensionKey[QuartzSchedulerExtension]{
+  def apply(system: ActorSystem,configuration:Config) = new QuartzSchedulerExtension(system,configuration)
+}
 
 /**
  * Note that this extension will only be instantiated *once* *per actor system*.
  *
  */
-class QuartzSchedulerExtension(system: ExtendedActorSystem) extends Extension {
+class QuartzSchedulerExtension(system: ActorSystem,configuration:Config) extends Extension {
 
   private val log = Logging(system, this)
-
 
   // todo - use of the circuit breaker to encapsulate quartz failures?
   def schedulerName = "QuartzScheduler~%s".format(system.name)
 
-  protected var config = system.settings.config.withFallback(defaultConfig).getConfig("akka.quartz").root.toConfig
+
+
+  protected var config = configuration.withFallback(defaultConfig).getConfig("quartz").root.toConfig
 
  // For config values that can be omitted by user, to setup a fallback
   lazy val defaultConfig =  ConfigFactory.parseString("""
-    akka.quartz {
+    quartz {
       threadPool {
         threadCount = 1
         threadPriority = 5
@@ -118,9 +121,9 @@ class QuartzSchedulerExtension(system: ExtendedActorSystem) extends Extension {
    */
   def reloadConfig(conf:Config):Unit = {
 
-    log.info("Reloading configuration for "+schedulerName)
+    log.info("Reloading configuration")
 
-    config = conf.withFallback(defaultConfig).getConfig("akka.quartz").root.toConfig
+    config = conf.withFallback(defaultConfig).getConfig("quartz").root.toConfig
     schedules = QuartzSchedules(config, defaultTimezone) map { kv =>
       kv._1.toUpperCase -> kv._2
     }
@@ -133,8 +136,9 @@ class QuartzSchedulerExtension(system: ExtendedActorSystem) extends Extension {
         case None => {                                                             //the running job was not found in the new configuration, delete the job
           log.info("Deleting job "+e._1)
           scheduler.deleteJob(e._2)
+          runningJobs -= e._1
         }
-        case Some(schedule:QuartzSchedule) => {                                    //the running job is being found among the new schedules, then build the Trigger
+        case Some(schedule:QuartzSchedule) => {                                    //the running job is being found among the new schedules, then rebuild the Trigger
           log.info("Respawning job "+e._1)                                         //using the new configuration
           val newTrigger = schedule.buildTrigger(e._1)
           val jobDetail = scheduler.getJobDetail(e._2)
@@ -187,6 +191,7 @@ class QuartzSchedulerExtension(system: ExtendedActorSystem) extends Extension {
    */
   def resumeAll(): Unit = {
     log.info("Resuming all Quartz jobs.")
+//    scheduler.resumeAll
   }
 
   /**
